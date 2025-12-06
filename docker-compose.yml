@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://filmsense:password@db:5432/filmsense
+      - REDIS_URL=redis://redis:6379
+      - DEBUG=true
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/app
+    restart: unless-stopped
+
+  db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_DB: filmsense
+      POSTGRES_USER: filmsense
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  triton:
+    image: nvcr.io/nvidia/tritonserver:23.10-py3
+    ports:
+      - "8001:8001"
+      - "8002:8002"
+    volumes:
+      - ./triton_models:/models
+    command: tritonserver --model-repository=/models --allow-http=true
+    restart: unless-stopped
+    profiles:
+      - ml  # Optional service, start with: docker-compose --profile ml up
+
+volumes:
+  postgres_data:
+  redis_data:
