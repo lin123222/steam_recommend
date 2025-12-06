@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
     
+    # 日志配置
+    LOG_DIR: Optional[str] = None  # 日志目录，默认为项目根目录下的 logs
+    ENABLE_FILE_LOGGING: bool = True
+    ENABLE_CONSOLE_LOGGING: bool = True
+    SLOW_REQUEST_THRESHOLD: float = 1.0  # 慢请求阈值（秒）
+    SLOW_QUERY_THRESHOLD: float = 0.5  # 慢查询阈值（秒）
+    
     # 数据库配置
     DATABASE_URL: Optional[str] = None  # 如果设置了 DATABASE_URL，将优先使用，忽略其他 DB_* 配置
     DB_TYPE: str = "postgresql"  # postgresql 或 mysql

@@ -3,13 +3,16 @@
 """
 
 import json
+import time
 from typing import List, Optional, Dict, Any
 import logging
 
 from backend.cache.redis_client import get_redis_client, RedisKeyManager
 from backend.config import settings
+from backend.logging_config import get_logger
+from backend.utils.logger import log_cache_operation
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CacheManager:
@@ -34,16 +37,39 @@ class CacheManager:
             recommendations: 推荐游戏ID列表
             ttl: 过期时间（秒）
         """
+        start_time = time.time()
         key = self.key_manager.recommendation_cache_key(user_id)
         
-        # 序列化推荐结果
-        recommendations_json = json.dumps(recommendations)
-        
-        # 设置缓存
-        ttl = ttl or self.default_ttl
-        await self.redis.setex(key, ttl, recommendations_json)
-        
-        logger.debug(f"Cached recommendations for user {user_id}, TTL: {ttl}s")
+        try:
+            # 序列化推荐结果
+            recommendations_json = json.dumps(recommendations)
+            
+            # 设置缓存
+            ttl = ttl or self.default_ttl
+            await self.redis.setex(key, ttl, recommendations_json)
+            
+            duration_ms = (time.time() - start_time) * 1000
+            log_cache_operation(
+                operation="SET",
+                key=key,
+                duration_ms=duration_ms,
+                user_id=user_id,
+                items_count=len(recommendations),
+                ttl=ttl
+            )
+            logger.debug(f"Cached recommendations for user {user_id}, TTL: {ttl}s")
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(f"Failed to cache recommendations for user {user_id}: {e}", exc_info=True)
+            log_cache_operation(
+                operation="SET",
+                key=key,
+                duration_ms=duration_ms,
+                user_id=user_id,
+                success=False,
+                error=str(e)
+            )
+            raise
     
     async def get_cached_recommendations(self, user_id: int) -> Optional[List[int]]:
         """
@@ -55,18 +81,46 @@ class CacheManager:
         Returns:
             推荐游戏ID列表或None
         """
+        start_time = time.time()
         key = self.key_manager.recommendation_cache_key(user_id)
         
-        recommendations_json = await self.redis.get(key)
-        if not recommendations_json:
-            return None
-        
         try:
+            recommendations_json = await self.redis.get(key)
+            duration_ms = (time.time() - start_time) * 1000
+            
+            if not recommendations_json:
+                log_cache_operation(
+                    operation="GET",
+                    key=key,
+                    hit=False,
+                    duration_ms=duration_ms,
+                    user_id=user_id
+                )
+                return None
+            
             recommendations = json.loads(recommendations_json)
+            log_cache_operation(
+                operation="GET",
+                key=key,
+                hit=True,
+                duration_ms=duration_ms,
+                user_id=user_id,
+                items_count=len(recommendations)
+            )
             logger.debug(f"Cache hit for user {user_id} recommendations")
             return recommendations
         except Exception as e:
-            logger.error(f"Failed to deserialize cached recommendations for user {user_id}: {e}")
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(f"Failed to get cached recommendations for user {user_id}: {e}", exc_info=True)
+            log_cache_operation(
+                operation="GET",
+                key=key,
+                hit=False,
+                duration_ms=duration_ms,
+                user_id=user_id,
+                success=False,
+                error=str(e)
+            )
             return None
     
     async def invalidate_user_cache(self, user_id: int) -> None:

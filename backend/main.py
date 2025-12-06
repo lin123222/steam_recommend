@@ -2,24 +2,30 @@
 FilmSense Backend - 主应用入口
 """
 
+import uuid
+import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
-import time
-import logging
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.config import settings
 from backend.api.v1.api import api_router
 from backend.database.connection import init_db, close_db
 from backend.cache.redis_client import init_redis, close_redis
+from backend.logging_config import setup_logging, get_logger
+from backend.utils.logger import log_request, log_slow_request
 
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# 初始化日志系统
+setup_logging(
+    log_dir=settings.LOG_DIR,
+    log_level=settings.LOG_LEVEL,
+    enable_file_logging=settings.ENABLE_FILE_LOGGING,
+    enable_console_logging=settings.ENABLE_CONSOLE_LOGGING
 )
-logger = logging.getLogger(__name__)
+
+logger = get_logger(__name__)
 
 
 def create_application() -> FastAPI:
@@ -67,21 +73,79 @@ def setup_middleware(app: FastAPI) -> None:
             allowed_hosts=["*"]  # 生产环境应该配置具体的主机
         )
     
-    # 请求时间中间件
+    # 请求ID中间件
     @app.middleware("http")
-    async def add_process_time_header(request: Request, call_next):
-        start_time = time.time()
+    async def add_request_id(request: Request, call_next):
+        """为每个请求添加唯一ID"""
+        request_id = str(uuid.uuid4())[:8]
+        request.state.request_id = request_id
         response = await call_next(request)
-        process_time = time.time() - start_time
-        response.headers["X-Process-Time"] = str(process_time)
-        
-        # 记录慢请求
-        if process_time > 1.0:  # 超过1秒的请求
-            logger.warning(
-                f"Slow request: {request.method} {request.url} took {process_time:.2f}s"
-            )
-        
+        response.headers["X-Request-ID"] = request_id
         return response
+    
+    # 请求日志中间件
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        """记录所有HTTP请求"""
+        start_time = time.time()
+        request_id = getattr(request.state, "request_id", None)
+        
+        # 获取客户端IP
+        client_ip = request.client.host if request.client else None
+        if "x-forwarded-for" in request.headers:
+            client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+        
+        # 获取用户ID（如果已认证）
+        user_id = None
+        if hasattr(request.state, "user_id"):
+            user_id = request.state.user_id
+        
+        try:
+            response = await call_next(request)
+            process_time = (time.time() - start_time) * 1000  # 转换为毫秒
+            
+            # 添加处理时间头
+            response.headers["X-Process-Time"] = f"{process_time:.2f}"
+            
+            # 记录请求日志
+            log_request(
+                method=request.method,
+                path=str(request.url.path),
+                status_code=response.status_code,
+                duration_ms=process_time,
+                user_id=user_id,
+                ip=client_ip,
+                request_id=request_id,
+                query_params=str(request.query_params) if request.query_params else None
+            )
+            
+            # 记录慢请求
+            log_slow_request(
+                method=request.method,
+                path=str(request.url.path),
+                duration_ms=process_time,
+                threshold=settings.SLOW_REQUEST_THRESHOLD * 1000,
+                user_id=user_id,
+                request_id=request_id
+            )
+            
+            return response
+            
+        except Exception as e:
+            process_time = (time.time() - start_time) * 1000
+            logger.error(
+                f"Request failed: {request.method} {request.url.path} - {str(e)}",
+                exc_info=True,
+                extra={
+                    'method': request.method,
+                    'path': str(request.url.path),
+                    'duration_ms': process_time,
+                    'user_id': user_id,
+                    'ip': client_ip,
+                    'request_id': request_id
+                }
+            )
+            raise
 
 
 def setup_event_handlers(app: FastAPI) -> None:
@@ -124,14 +188,26 @@ def setup_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         """全局异常处理器"""
-        logger.error(f"Global exception: {exc}", exc_info=True)
+        request_id = getattr(request.state, "request_id", None)
+        client_ip = request.client.host if request.client else None
+        
+        logger.error(
+            f"Unhandled exception: {type(exc).__name__}: {str(exc)}",
+            exc_info=True,
+            extra={
+                'method': request.method,
+                'path': str(request.url.path),
+                'ip': client_ip,
+                'request_id': request_id
+            }
+        )
         
         return JSONResponse(
             status_code=500,
             content={
                 "error": "Internal server error",
                 "message": "An unexpected error occurred",
-                "request_id": getattr(request.state, "request_id", None)
+                "request_id": request_id
             }
         )
 

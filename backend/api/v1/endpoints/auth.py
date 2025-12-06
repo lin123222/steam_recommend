@@ -2,7 +2,7 @@
 认证相关API端点
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.auth_service import AuthService
@@ -13,13 +13,17 @@ from backend.schemas.auth import (
     UserCreate, UserLogin, UserResponse, 
     TokenResponse, RefreshTokenRequest
 )
+from backend.logging_config import get_logger
+from backend.utils.logger import log_auth_event
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db_session)
 ):
     """
@@ -29,12 +33,13 @@ async def register(
     - **email**: 邮箱地址
     - **password**: 密码（8-128字符）
     """
-    return await AuthService.register(db, user_data)
+    return await AuthService.register(db, user_data, request)
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
     login_data: UserLogin,
+    request: Request,
     db: AsyncSession = Depends(get_db_session)
 ):
     """
@@ -45,12 +50,13 @@ async def login(
     
     返回访问令牌和刷新令牌
     """
-    return await AuthService.login(db, login_data.username, login_data.password)
+    return await AuthService.login(db, login_data.username, login_data.password, request)
 
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
     refresh_data: RefreshTokenRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db_session)
 ):
     """
@@ -65,11 +71,17 @@ async def refresh_token(
         user_id = verify_refresh_token(refresh_data.refresh_token)
         
         # 生成新的令牌
-        return await AuthService.refresh_token(db, user_id)
+        return await AuthService.refresh_token(db, user_id, request)
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.warning(f"Token refresh failed: {str(e)}")
+        log_auth_event(
+            event_type="token_refresh",
+            success=False,
+            reason=f"Invalid refresh token: {str(e)}"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token"
@@ -77,13 +89,28 @@ async def refresh_token(
 
 
 @router.post("/logout")
-async def logout():
+async def logout(
+    request: Request,
+    user_id: int = Depends(get_current_user_id)
+):
     """
     用户登出
     
     注意：由于使用JWT，服务端无法主动使令牌失效。
     客户端应该删除本地存储的令牌。
     """
+    client_ip = request.client.host if request.client else None
+    if "x-forwarded-for" in request.headers:
+        client_ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+    
+    log_auth_event(
+        event_type="logout",
+        user_id=user_id,
+        success=True,
+        ip=client_ip
+    )
+    logger.info(f"User logged out: user_id={user_id}")
+    
     return {"message": "Logout successful. Please remove tokens from client storage."}
 
 

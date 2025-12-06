@@ -15,8 +15,10 @@ from backend.ranking.ranking_strategy import RankingStrategy
 from backend.database.crud.user_crud import get_user_interaction_count
 from backend.database.connection import get_db_session
 from backend.config import settings
+from backend.logging_config import get_logger
+from backend.utils.logger import log_recommendation
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RecommendationPipeline:
@@ -75,6 +77,15 @@ class RecommendationPipeline:
                     total_time = (time.time() - start_time) * 1000
                     logger.info(f"Cache hit for user {user_id}, time: {total_time:.2f}ms")
                     
+                    # 记录推荐日志
+                    log_recommendation(
+                        user_id=user_id,
+                        algorithm="cached",
+                        recommendations_count=len(cached_recommendations[:top_k]),
+                        total_time_ms=total_time,
+                        from_cache=True
+                    )
+                    
                     return {
                         "user_id": user_id,
                         "recommendations": cached_recommendations[:top_k],
@@ -86,17 +97,28 @@ class RecommendationPipeline:
             
             # 2. 获取用户交互次数
             interaction_count = await self._get_user_interaction_count(user_id)
+            logger.debug(f"User {user_id} has {interaction_count} interactions")
             
             # 3. 选择召回策略
             recall_algorithm = self._select_recall_algorithm(algorithm, interaction_count)
+            logger.info(f"Selected recall algorithm: {recall_algorithm} for user {user_id} (interactions: {interaction_count})")
             
             # 4. 召回阶段
             recall_start = time.time()
             candidates = await self._recall_stage(user_id, interaction_count, recall_algorithm)
             recall_time = (time.time() - recall_start) * 1000
+            logger.info(f"Recall stage completed: {len(candidates)} candidates in {recall_time:.2f}ms")
             
             if not candidates:
-                logger.warning(f"No candidates found for user {user_id}")
+                logger.warning(f"No candidates found for user {user_id} using algorithm {recall_algorithm}")
+                log_recommendation(
+                    user_id=user_id,
+                    algorithm=recall_algorithm,
+                    recommendations_count=0,
+                    total_time_ms=(time.time() - start_time) * 1000,
+                    recall_time_ms=recall_time,
+                    from_cache=False
+                )
                 return self._empty_recommendation_result(user_id, recall_algorithm)
             
             # 5. 排序和过滤阶段
@@ -105,22 +127,31 @@ class RecommendationPipeline:
                 candidates, user_id, strategy=ranking_strategy, **kwargs
             )
             ranking_time = (time.time() - ranking_start) * 1000
+            logger.info(f"Ranking stage completed: {len(filtered_candidates)} items after filtering in {ranking_time:.2f}ms")
             
             # 7. 获取最终推荐结果
             final_recommendations = filtered_candidates[:top_k]
+            logger.info(f"Final recommendations: {len(final_recommendations)} items for user {user_id}")
             
             # 8. 缓存结果（仅自动模式）
             if algorithm == "auto" and final_recommendations:
                 recommendation_ids = [item_id for item_id, _ in final_recommendations]
                 await self.cache_manager.cache_recommendations(user_id, recommendation_ids)
+                logger.debug(f"Cached {len(recommendation_ids)} recommendations for user {user_id}")
             
             # 9. 记录推荐日志
-            await self._log_recommendation(
-                user_id, final_recommendations, recall_algorithm,
-                recall_time, ranking_time
-            )
-            
             total_time = (time.time() - start_time) * 1000
+            log_recommendation(
+                user_id=user_id,
+                algorithm=recall_algorithm,
+                recommendations_count=len(final_recommendations),
+                total_time_ms=total_time,
+                recall_time_ms=recall_time,
+                ranking_time_ms=ranking_time,
+                from_cache=False,
+                candidates_count=len(candidates),
+                filtered_count=len(filtered_candidates)
+            )
             
             return {
                 "user_id": user_id,
@@ -217,20 +248,9 @@ class RecommendationPipeline:
         recall_time: float,
         ranking_time: float
     ) -> None:
-        """记录推荐日志"""
-        try:
-            # 这里可以记录到数据库或日志系统
-            logger.info(
-                f"Recommendation completed for user {user_id}: "
-                f"algorithm={algorithm}, count={len(recommendations)}, "
-                f"recall_time={recall_time:.2f}ms, ranking_time={ranking_time:.2f}ms"
-            )
-            
-            # 可以异步写入数据库
-            # await self._save_recommendation_log(...)
-            
-        except Exception as e:
-            logger.error(f"Failed to log recommendation for user {user_id}: {e}")
+        """记录推荐日志（已弃用，使用 log_recommendation 工具函数）"""
+        logger.warning("_log_recommendation is deprecated, use log_recommendation from utils.logger instead")
+        # 保留此方法用于向后兼容，但实际日志记录已在 recommend 方法中完成
     
     def _empty_recommendation_result(self, user_id: int, algorithm: str) -> Dict:
         """返回空推荐结果"""
