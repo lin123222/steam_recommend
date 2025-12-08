@@ -14,8 +14,10 @@ from backend.config import settings
 from backend.api.v1.api import api_router
 from backend.database.connection import init_db, close_db
 from backend.cache.redis_client import init_redis, close_redis
+from backend.cache.faiss_index import get_faiss_index_manager
 from backend.logging_config import setup_logging, get_logger
 from backend.utils.logger import log_request, log_slow_request
+from backend.tasks.demo_import import main as demo_import_main
 
 # 初始化日志系统
 setup_logging(
@@ -26,6 +28,22 @@ setup_logging(
 )
 
 logger = get_logger(__name__)
+
+
+async def _init_faiss_index_background(faiss_manager):
+    """后台初始化 FAISS 索引"""
+    try:
+        logger.info("Initializing FAISS index in background...")
+        success = await faiss_manager.build_index(force_rebuild=False)
+        if success:
+            logger.info(
+                f"FAISS index initialized successfully: "
+                f"{faiss_manager.get_index_size()} vectors"
+            )
+        else:
+            logger.warning("FAISS index initialization failed, will use legacy method")
+    except Exception as e:
+        logger.error(f"Background FAISS index initialization failed: {e}")
 
 
 def create_application() -> FastAPI:
@@ -163,6 +181,19 @@ def setup_event_handlers(app: FastAPI) -> None:
         # 初始化Redis连接
         await init_redis()
         logger.info("Redis connection initialized")
+        
+        # 后台导入 demo 向量并构建索引（不阻塞启动）
+        import asyncio
+        asyncio.create_task(demo_import_main())
+
+        # 初始化 FAISS 索引（后台异步初始化，不阻塞启动）
+        try:
+            faiss_manager = get_faiss_index_manager(model_name="lightgcn", index_type="IVF")
+            # 在后台任务中初始化索引，避免阻塞应用启动
+            import asyncio
+            asyncio.create_task(_init_faiss_index_background(faiss_manager))
+        except Exception as e:
+            logger.warning(f"Failed to initialize FAISS index manager: {e}")
         
         logger.info("FilmSense Backend started successfully!")
     
