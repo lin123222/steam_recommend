@@ -23,9 +23,10 @@ class RecommendationRequest(BaseModel):
 
 
 class GameInfo(BaseModel):
-    """游戏信息模式"""
+    """游戏信息模式（与 game_metadata 对齐）"""
     product_id: int
     title: str
+    app_name: Optional[str] = None
     genres: List[str] = []
     tags: List[str] = []
     developer: Optional[str] = None
@@ -34,6 +35,13 @@ class GameInfo(BaseModel):
     sentiment: Optional[str] = None
     release_date: Optional[str] = None
     price: Optional[float] = None
+    discount_price: Optional[float] = None
+    description: Optional[str] = None
+    short_description: Optional[str] = None
+    specs: List[str] = []
+    url: Optional[str] = None
+    reviews_url: Optional[str] = None
+    early_access: Optional[bool] = None
     score: float  # 推荐分数
 
 

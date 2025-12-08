@@ -24,12 +24,45 @@ async def get_game_by_id(db: AsyncSession, app_id: str) -> Optional[GameMetadata
         游戏对象或 None
     """
     try:
-        stmt = select(GameMetadata).where(GameMetadata.app_id == app_id)
+        # GameMetadata 使用 product_id 作为主键，外部传入的 app_id 兼容为字符串或数字
+        try:
+            product_id = int(app_id)
+        except (TypeError, ValueError):
+            logger.error(f"Invalid app_id provided: {app_id}")
+            return None
+
+        stmt = select(GameMetadata).where(GameMetadata.product_id == product_id)
         result = await db.execute(stmt)
         return result.scalar_one_or_none()
     except Exception as e:
         logger.error(f"Error getting game {app_id}: {e}")
         return None
+
+
+async def get_games_by_ids(
+    db: AsyncSession,
+    product_ids: List[int]
+) -> List[GameMetadata]:
+    """
+    根据一组 product_id 批量获取游戏
+
+    Args:
+        db: 数据库会话
+        product_ids: 游戏 product_id 列表
+
+    Returns:
+        游戏对象列表
+    """
+    if not product_ids:
+        return []
+
+    try:
+        stmt = select(GameMetadata).where(GameMetadata.product_id.in_(product_ids))
+        result = await db.execute(stmt)
+        return list(result.scalars().all())
+    except Exception as e:
+        logger.error(f"Error getting games by ids: {e}")
+        return []
 
 
 async def get_games_list(

@@ -86,9 +86,11 @@ class RecommendationPipeline:
                         from_cache=True
                     )
                     
+                    cached_slice = cached_recommendations[:top_k]
                     return {
                         "user_id": user_id,
-                        "recommendations": cached_recommendations[:top_k],
+                        "recommendations": cached_slice,
+                        "recommendation_scores": [(rid, None) for rid in cached_slice],
                         "algorithm": "cached",
                         "timestamp": int(time.time()),
                         "total_time_ms": total_time,
@@ -156,6 +158,7 @@ class RecommendationPipeline:
             return {
                 "user_id": user_id,
                 "recommendations": [item_id for item_id, _ in final_recommendations],
+                "recommendation_scores": final_recommendations,
                 "algorithm": recall_algorithm,
                 "timestamp": int(time.time()),
                 "total_time_ms": total_time,
@@ -257,6 +260,7 @@ class RecommendationPipeline:
         return {
             "user_id": user_id,
             "recommendations": [],
+            "recommendation_scores": [],
             "algorithm": algorithm,
             "timestamp": int(time.time()),
             "total_time_ms": 0.0,

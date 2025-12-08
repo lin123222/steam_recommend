@@ -14,6 +14,7 @@ from backend.schemas.recommendations import (
     RecommendationResponse, ExplanationResponse, GameInfo
 )
 from backend.database.crud.user_crud import get_user_by_id
+from backend.database.crud import game_crud
 
 router = APIRouter()
 
@@ -100,24 +101,48 @@ async def get_recommendations(
             **recommend_kwargs
         )
         
-        # 构造响应数据
+        # 构造响应数据：批量拉取游戏元数据并保留打分
+        scored_recs = result.get("recommendation_scores") or [
+            (pid, None) for pid in result.get("recommendations", [])
+        ]
+        product_ids = [pid for pid, _ in scored_recs]
+
+        games = await game_crud.get_games_by_ids(db, product_ids)
+        game_map = {g.product_id: g for g in games}
+
+        def _split_text(value: Optional[str]):
+            if not value:
+                return []
+            return [segment.strip() for segment in value.split(",") if segment.strip()]
+
         recommendations = []
-        for product_id in result["recommendations"]:
-            # 这里简化处理，实际应该从数据库或缓存获取游戏详情
-            game_info = GameInfo(
+        for product_id, score in scored_recs:
+            meta = game_map.get(product_id)
+            title = (meta.title if meta and meta.title else None) \
+                or (meta.app_name if meta and meta.app_name else None) \
+                or f"Game {product_id}"
+
+            recommendations.append(GameInfo(
                 product_id=product_id,
-                title=f"Game {product_id}",  # 实际应该从数据库获取
-                genres=["Action", "Adventure"],  # 示例数据
-                tags=["Singleplayer", "Story Rich"],
-                developer="Unknown Developer",
-                publisher="Unknown Publisher",
-                metascore=85,
-                sentiment="Very Positive",
-                release_date="2023-01-01",
-                price=29.99,
-                score=0.95  # 推荐分数
-            )
-            recommendations.append(game_info)
+                app_name=meta.app_name if meta else None,
+                title=title,
+                genres=_split_text(meta.genres) if meta else [],
+                tags=_split_text(meta.tags) if meta else [],
+                developer=meta.developer if meta else None,
+                publisher=meta.publisher if meta else None,
+                metascore=meta.metascore if meta else None,
+                sentiment=meta.sentiment if meta else None,
+                release_date=meta.release_date if meta else None,
+                price=meta.price if meta else None,
+                discount_price=meta.discount_price if meta else None,
+                description=meta.description if meta else None,
+                short_description=meta.short_description if meta else None,
+                specs=_split_text(meta.specs) if meta and meta.specs else [],
+                url=meta.url if meta else None,
+                reviews_url=meta.reviews_url if meta else None,
+                early_access=meta.early_access if meta else None,
+                score=float(score) if score is not None else 0.0
+            ))
         
         return RecommendationResponse(
             user_id=user_id,

@@ -2,7 +2,7 @@
 游戏相关的 API 端点
 """
 
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _split_text(value: Optional[str]) -> List[str]:
+    """将存储为逗号分隔的字符串转为列表"""
+    if not value:
+        return []
+    return [segment.strip() for segment in value.split(",") if segment.strip()]
 
 
 @router.get("/{app_id}", response_model=ResponseModel)
@@ -42,24 +49,28 @@ async def get_game_detail(
         raise HTTPException(status_code=404, detail="Game not found")
     
     # 转换为响应模型
+    # GameMetadata 主要字段：product_id, title, app_name, genres, tags, developer, publisher, metascore, sentiment, release_date, price
+    title = game.title or game.app_name or str(game.product_id)
+    app_name = game.app_name or title
+
     game_detail = GameDetail(
-        app_id=game.app_id,
-        app_name=game.app_name,
-        description=game.description,
-        short_description=game.short_description,
-        genres=game.genres.split(",") if game.genres else [],
-        tags=game.tags.split(",") if game.tags else [],
+        app_id=str(game.product_id),
+        app_name=app_name,
+        description=getattr(game, "description", None),
+        short_description=getattr(game, "short_description", None),
+        genres=_split_text(game.genres),
+        tags=_split_text(game.tags),
         developer=game.developer,
         publisher=game.publisher,
         release_date=str(game.release_date) if game.release_date else None,
-        price=float(game.price) if game.price else 0.0,
-        discount_price=float(game.discount_price) if game.discount_price else None,
-        discount_percent=int((1 - game.discount_price / game.price) * 100) if game.discount_price and game.price else 0,
-        specs=game.specs.split(",") if game.specs else [],
-        languages=game.languages.split(",") if game.languages else [],
-        store_url=f"https://store.steampowered.com/app/{app_id}",
-        reviews_url=f"https://store.steampowered.com/app/{app_id}#reviews",
-        early_access=game.early_access if hasattr(game, 'early_access') else False
+        price=float(game.price) if game.price is not None else 0.0,
+        discount_price=float(getattr(game, "discount_price", 0.0)) if getattr(game, "discount_price", None) else None,
+        discount_percent=int((1 - getattr(game, "discount_price") / game.price) * 100) if getattr(game, "discount_price", None) and game.price else 0,
+        specs=_split_text(getattr(game, "specs", None)),
+        languages=_split_text(getattr(game, "languages", None)),
+        store_url=f"https://store.steampowered.com/app/{game.product_id}",
+        reviews_url=f"https://store.steampowered.com/app/{game.product_id}#reviews",
+        early_access=bool(getattr(game, "early_access", False))
     )
     
     return ResponseModel(
@@ -111,18 +122,21 @@ async def get_games_list(
     # 转换为响应模型
     game_items = []
     for game in games:
+        title = game.title or game.app_name or str(game.product_id)
+        app_name = game.app_name or title
+
         game_items.append(GameListItem(
-            app_id=game.app_id,
-            app_name=game.app_name,
-            genres=game.genres.split(",") if game.genres else [],
-            tags=game.tags.split(",") if game.tags else [],
-            price=float(game.price) if game.price else 0.0,
-            discount_price=float(game.discount_price) if game.discount_price else None,
+            app_id=str(game.product_id),
+            app_name=app_name,
+            genres=_split_text(game.genres),
+            tags=_split_text(game.tags),
+            price=float(game.price) if game.price is not None else 0.0,
+            discount_price=float(getattr(game, "discount_price", 0.0)) if getattr(game, "discount_price", None) else None,
             developer=game.developer,
             publisher=game.publisher,
             release_date=str(game.release_date) if game.release_date else None,
-            specs=game.specs.split(",") if game.specs else [],
-            early_access=game.early_access if hasattr(game, 'early_access') else False
+            specs=_split_text(getattr(game, "specs", None)),
+            early_access=bool(getattr(game, "early_access", False))
         ))
     
     # 构建分页信息

@@ -88,14 +88,21 @@ class GameMetadata(Base):
     product_id = Column(Integer, primary_key=True, index=True)
     title = Column(String(255), nullable=False)
     app_name = Column(String(255))
-    genres = Column(Text)  # JSON字符串存储
-    tags = Column(Text)    # JSON字符串存储
+    genres = Column(Text)  # 逗号分隔
+    tags = Column(Text)    # 逗号分隔
     developer = Column(String(255))
     publisher = Column(String(255))
     metascore = Column(Integer)
     sentiment = Column(String(50))
-    release_date = Column(String(20))
+    release_date = Column(String(50))
     price = Column(Float)
+    discount_price = Column(Float)
+    description = Column(Text)
+    short_description = Column(Text)
+    specs = Column(Text)  # 逗号分隔
+    url = Column(String(500))
+    reviews_url = Column(String(500))
+    early_access = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
