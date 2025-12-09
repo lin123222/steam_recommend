@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     MIN_INTERACTION_FOR_EMBEDDING: int = 5
     MIN_INTERACTION_FOR_CONTENT: int = 3
     
+    # 动态向量融合配置（实时推荐调整）
+    DYNAMIC_FUSION_ENABLED: bool = True  # 是否启用动态向量融合
+    DYNAMIC_FUSION_MIN_INTERACTIONS: int = 3  # 触发融合的最小交互次数
+    DYNAMIC_FUSION_WEIGHT: float = 0.1  # 交互向量的融合权重 (0-1)
+    DYNAMIC_FUSION_MAX_SEQUENCE: int = 10  # 用于融合的最大序列长度
+    DYNAMIC_FUSION_TIME_DECAY: bool = True  # 是否启用时间衰减
+    
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v):

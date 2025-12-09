@@ -1,5 +1,9 @@
 """
 基于嵌入的召回（使用 FAISS 优化）
+
+支持动态用户向量融合：当用户交互次数达到阈值后，
+将用户交互过的游戏向量与原始用户向量进行加权融合，
+实现推荐结果的实时动态调整。
 """
 
 import time
@@ -8,10 +12,11 @@ from typing import List, Tuple, Optional, Dict
 from backend.recall.base_recall import BaseRecall
 from backend.cache.feature_store import FeatureStore
 from backend.cache.faiss_index import get_faiss_index_manager
+from backend.config import settings
 
 
 class EmbeddingRecall(BaseRecall):
-    """基于嵌入的召回器（使用 FAISS 进行高效向量搜索）"""
+    """基于嵌入的召回器（使用 FAISS 进行高效向量搜索，支持动态向量融合）"""
     
     def __init__(self, model_name: str = "lightgcn", use_faiss: bool = True, index_type: str = "IVF"):
         """
@@ -60,27 +65,46 @@ class EmbeddingRecall(BaseRecall):
         user_id: int, 
         top_k: int = 500,
         exclude_played: bool = True,
+        use_dynamic_fusion: bool = True,
         **kwargs
     ) -> List[Tuple[int, float]]:
         """
-        基于用户嵌入的召回
+        基于用户嵌入的召回（支持动态向量融合）
+        
+        当 use_dynamic_fusion=True 且用户交互次数 >= 阈值时，
+        会使用动态融合后的用户向量进行召回，实现实时推荐调整。
         
         Args:
             user_id: 用户ID
             top_k: 召回数量
             exclude_played: 是否排除已玩游戏
+            use_dynamic_fusion: 是否启用动态向量融合
             **kwargs: 其他参数
             
         Returns:
             List[(product_id, score)]: 候选集
         """
         start_time = time.time()
+        used_dynamic = False
         
         try:
-            # 获取用户嵌入
-            user_embedding = await self.feature_store.get_user_embedding(
-                user_id, self.model_name
-            )
+            # 获取用户嵌入（根据配置决定是否使用动态融合）
+            if use_dynamic_fusion and settings.DYNAMIC_FUSION_ENABLED:
+                user_embedding = await self.feature_store.get_dynamic_user_embedding(
+                    user_id,
+                    self.model_name,
+                    min_interactions=settings.DYNAMIC_FUSION_MIN_INTERACTIONS,
+                    fusion_weight=settings.DYNAMIC_FUSION_WEIGHT,
+                    max_sequence_len=settings.DYNAMIC_FUSION_MAX_SEQUENCE,
+                    use_time_decay=settings.DYNAMIC_FUSION_TIME_DECAY
+                )
+                # 检查是否实际使用了动态融合
+                user_sequence = await self.feature_store.get_user_sequence(user_id, 1)
+                used_dynamic = len(user_sequence) >= settings.DYNAMIC_FUSION_MIN_INTERACTIONS
+            else:
+                user_embedding = await self.feature_store.get_user_embedding(
+                    user_id, self.model_name
+                )
             
             if user_embedding is None:
                 self.logger.warning(f"No embedding found for user {user_id}")
@@ -111,7 +135,11 @@ class EmbeddingRecall(BaseRecall):
             
             # 记录统计信息
             elapsed_time = time.time() - start_time
-            self.log_recall_stats(user_id, len(candidates), elapsed_time)
+            fusion_info = " (dynamic fusion)" if used_dynamic else ""
+            self.logger.info(
+                f"Recall completed for user {user_id}{fusion_info}: "
+                f"{len(candidates)} candidates in {elapsed_time:.3f}s"
+            )
             
             return candidates
             

@@ -304,3 +304,91 @@ class FeatureStore:
         
         game_ids = await self.redis.smembers(key)
         return [int(game_id) for game_id in game_ids]
+
+    async def get_dynamic_user_embedding(
+        self,
+        user_id: int,
+        model_name: str = "lightgcn",
+        min_interactions: int = 3,
+        fusion_weight: float = 0.1,
+        max_sequence_len: int = 10,
+        use_time_decay: bool = True
+    ) -> Optional[np.ndarray]:
+        """
+        获取动态用户向量（融合用户交互历史）
+        
+        当用户交互次数 >= min_interactions 时，将用户交互过的游戏向量
+        与用户原始向量进行加权融合，实现实时推荐调整。
+        
+        Args:
+            user_id: 用户ID
+            model_name: 模型名称
+            min_interactions: 触发融合的最小交互次数
+            fusion_weight: 交互向量的融合权重 (0-1)，原始向量权重为 1-fusion_weight
+            max_sequence_len: 用于融合的最大序列长度
+            use_time_decay: 是否使用时间衰减（最近交互权重更高）
+            
+        Returns:
+            动态用户向量，如果用户不存在则返回 None
+        """
+        # 1. 获取原始用户向量
+        original_embedding = await self.get_user_embedding(user_id, model_name)
+        if original_embedding is None:
+            return None
+        
+        # 2. 获取用户交互序列
+        user_sequence = await self.get_user_sequence(user_id, max_sequence_len)
+        
+        # 交互次数不足，直接返回原始向量
+        if len(user_sequence) < min_interactions:
+            return original_embedding
+        
+        # 3. 获取交互游戏的向量
+        item_embeddings = await self.get_batch_item_embeddings(user_sequence, model_name)
+        
+        if not item_embeddings:
+            return original_embedding
+        
+        # 4. 计算交互向量（加权平均）
+        valid_embeddings = []
+        weights = []
+        
+        for i, item_id in enumerate(user_sequence):
+            if item_id in item_embeddings:
+                valid_embeddings.append(item_embeddings[item_id])
+                
+                if use_time_decay:
+                    # 时间衰减：最近的交互权重更高
+                    # 使用指数衰减：weight = exp(-decay_rate * position)
+                    decay_rate = 0.1
+                    weight = np.exp(-decay_rate * i)
+                else:
+                    weight = 1.0
+                weights.append(weight)
+        
+        if not valid_embeddings:
+            return original_embedding
+        
+        # 归一化权重
+        weights = np.array(weights)
+        weights = weights / weights.sum()
+        
+        # 加权平均计算交互向量
+        interaction_vector = np.zeros_like(original_embedding)
+        for emb, w in zip(valid_embeddings, weights):
+            interaction_vector += w * emb
+        
+        # 5. 融合原始向量和交互向量
+        dynamic_embedding = (1 - fusion_weight) * original_embedding + fusion_weight * interaction_vector
+        
+        # 6. L2 归一化（保持向量模长一致）
+        norm = np.linalg.norm(dynamic_embedding)
+        if norm > 0:
+            dynamic_embedding = dynamic_embedding / norm * np.linalg.norm(original_embedding)
+        
+        logger.debug(
+            f"Generated dynamic embedding for user {user_id}: "
+            f"{len(valid_embeddings)} items fused with weight {fusion_weight}"
+        )
+        
+        return dynamic_embedding
