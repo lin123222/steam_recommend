@@ -46,6 +46,29 @@ async def _init_faiss_index_background(faiss_manager):
         logger.error(f"Background FAISS index initialization failed: {e}")
 
 
+async def _compute_popular_games_background():
+    """后台计算热门游戏榜单"""
+    try:
+        # 等待一段时间，确保数据库初始化完成
+        import asyncio
+        await asyncio.sleep(3)
+        
+        logger.info("Starting popular games computation in background...")
+        
+        from backend.tasks.compute_popular_games import compute_popular_games, save_popular_games_to_redis
+        
+        popular_games = await compute_popular_games()
+        
+        if popular_games:
+            await save_popular_games_to_redis(popular_games)
+            logger.info(f"Popular games computation completed: {len(popular_games)} games")
+        else:
+            logger.warning("No popular games computed")
+            
+    except Exception as e:
+        logger.error(f"Background popular games computation failed: {e}")
+
+
 async def _compute_user_profiles_background():
     """后台计算用户画像"""
     try:
@@ -220,6 +243,9 @@ def setup_event_handlers(app: FastAPI) -> None:
             asyncio.create_task(_init_faiss_index_background(faiss_manager))
         except Exception as e:
             logger.warning(f"Failed to initialize FAISS index manager: {e}")
+        
+        # 后台计算热门游戏榜单（不阻塞启动）
+        asyncio.create_task(_compute_popular_games_background())
         
         # 后台计算用户画像（不阻塞启动）
         asyncio.create_task(_compute_user_profiles_background())
