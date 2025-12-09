@@ -120,7 +120,8 @@ async def calculate_gamer_dna(
     """
     计算用户的 Gamer DNA
     
-    基于用户的游戏库和游玩数据计算6维属性
+    注意：Gamer DNA 数据由启动脚本 compute_user_profiles.py 预计算并存入数据库。
+    此函数仅在数据库中没有预计算数据时，使用简单规则作为回退。
     
     Args:
         db: 数据库会话
@@ -130,20 +131,33 @@ async def calculate_gamer_dna(
         Gamer DNA 数据
     """
     try:
-        # 这里简化处理，实际应该基于用户的游戏品类、标签、游玩时长等数据计算
-        # 可以使用机器学习模型或规则引擎
+        # 首先检查数据库中是否已有预计算的数据
+        stmt = select(UserProfile).where(UserProfile.user_id == user_id)
+        result = await db.execute(stmt)
+        profile = result.scalar_one_or_none()
         
-        # 获取用户游戏库的品类分布
+        if profile and profile.gamer_dna_stats:
+            # 使用预计算的数据
+            try:
+                stats = json.loads(profile.gamer_dna_stats)
+                if stats and len(stats) > 0:
+                    return {
+                        "description": "基于你的游戏偏好分析",
+                        "stats": stats,
+                        "primary_type": profile.primary_type or "探索者",
+                        "secondary_type": profile.secondary_type or "策略家"
+                    }
+            except json.JSONDecodeError:
+                pass
+        
+        # 回退：使用游戏库数据简单计算
         stmt = select(UserLibrary).where(UserLibrary.user_id == user_id)
         result = await db.execute(stmt)
         library_items = result.scalars().all()
         
-        # 简化的计算逻辑（实际应该更复杂）
         stats = _get_default_gamer_dna_stats()
         
-        # 根据游戏数量和游玩时长调整
         if len(library_items) > 0:
-            # 这里可以添加更复杂的计算逻辑
             stats[0]["value"] = min(85, 50 + len(library_items) * 2)  # 策略
             stats[1]["value"] = min(90, 60 + len(library_items))      # 反应
             stats[2]["value"] = min(95, 70 + len(library_items))      # 探索
@@ -151,7 +165,6 @@ async def calculate_gamer_dna(
             stats[4]["value"] = min(75, 40 + len(library_items) * 2)  # 收集
             stats[5]["value"] = min(80, 50 + len(library_items))      # 竞技
         
-        # 确定主要和次要类型
         primary_type, secondary_type = _determine_player_types(stats)
         
         return {
@@ -210,6 +223,9 @@ async def get_favorite_genres(
     """
     获取用户喜爱的品类
     
+    注意：喜爱品类由启动脚本 compute_user_profiles.py 预计算并存入数据库。
+    此函数从数据库读取预计算的数据。
+    
     Args:
         db: 数据库会话
         user_id: 用户ID
@@ -218,8 +234,20 @@ async def get_favorite_genres(
         品类列表
     """
     try:
-        # 这里简化处理，实际应该基于用户的游戏库和游玩时长统计
-        # 返回默认的品类
+        # 从数据库读取预计算的数据
+        stmt = select(UserProfile).where(UserProfile.user_id == user_id)
+        result = await db.execute(stmt)
+        profile = result.scalar_one_or_none()
+        
+        if profile and profile.favorite_genres:
+            try:
+                genres = json.loads(profile.favorite_genres)
+                if genres and len(genres) > 0:
+                    return genres
+            except json.JSONDecodeError:
+                pass
+        
+        # 回退：返回默认品类
         return ["RPG", "Action", "Strategy"]
         
     except Exception as e:

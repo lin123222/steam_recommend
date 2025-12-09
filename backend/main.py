@@ -46,6 +46,33 @@ async def _init_faiss_index_background(faiss_manager):
         logger.error(f"Background FAISS index initialization failed: {e}")
 
 
+async def _compute_user_profiles_background():
+    """后台计算用户画像"""
+    try:
+        # 等待一段时间，确保其他初始化完成
+        import asyncio
+        await asyncio.sleep(5)
+        
+        logger.info("Starting user profile computation in background...")
+        
+        from backend.tasks.compute_user_profiles import UserProfileComputer
+        
+        computer = UserProfileComputer()
+        computer.load_embeddings()
+        await computer.load_game_metadata()
+        
+        # 计算用户画像（与 demo_import 的 DEMO_USER_COUNT 保持一致）
+        # 生产环境可以去掉 limit 或设置为 None 来处理所有用户
+        stats = await computer.compute_all_users(limit=20)  # 与 demo_import 一致
+        
+        logger.info(
+            f"User profile computation completed: "
+            f"total={stats['total']}, success={stats['success']}, failed={stats['failed']}"
+        )
+    except Exception as e:
+        logger.error(f"Background user profile computation failed: {e}")
+
+
 def create_application() -> FastAPI:
     """创建FastAPI应用"""
     
@@ -190,10 +217,12 @@ def setup_event_handlers(app: FastAPI) -> None:
         try:
             faiss_manager = get_faiss_index_manager(model_name="lightgcn", index_type="IVF")
             # 在后台任务中初始化索引，避免阻塞应用启动
-            import asyncio
             asyncio.create_task(_init_faiss_index_background(faiss_manager))
         except Exception as e:
             logger.warning(f"Failed to initialize FAISS index manager: {e}")
+        
+        # 后台计算用户画像（不阻塞启动）
+        asyncio.create_task(_compute_user_profiles_background())
         
         logger.info("FilmSense Backend started successfully!")
     
